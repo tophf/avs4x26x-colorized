@@ -96,6 +96,11 @@ void print_colored(WORD color, const char *msg, ...)
 #define print_details(...) print_colored(CONSOLE_DARKCYAN, ##__VA_ARGS__)
 #define print_info(...)    print_colored(CONSOLE_CYAN, ##__VA_ARGS__)
 
+#define print_trying(filter) print_details("avs4x264 [info]: trying \"%s\"\n", filter);
+#define print_indexing()     print_details("avs4x264 [info]: indexing...\n");
+#define print_success()      print_details("avs4x264 [info]: succeeded\n" );
+#define print_avs_error(res) print_colored(CONSOLE_RED, "avs [error]: %s\n", avs_as_string(res));
+
 /* load the library and functions we require from it */
 static int avs_load_library( avs_hnd_t *h )
 {
@@ -269,11 +274,11 @@ char* generate_new_commandline(int argc, char *argv[], int b_hbpp_vfw, int i_fra
     }
     for (i=argc-1;i>0;i--)
     {
-#define FIND_HBPP                                                                          \
-{                                                                                          \
-  i_width >>= 1;                                                                           \
+#define FIND_HBPP                                                                  \
+{                                                                                  \
+  i_width >>= 1;                                                                   \
   print_info("avs4x264 [info]: High bit depth detected, resolution corrected\n" ); \
-  break;                                                                                  \
+  break;                                                                           \
 }
         if( b_hbpp_vfw == 1 )
             FIND_HBPP
@@ -379,7 +384,7 @@ int main(int argc, char *argv[])
     char *cmd;
     char *infile = NULL;
     const char *csp = NULL;
-	const char *csp_human = NULL;
+    const char *csp_human = NULL;
 
     h_console = GetStdHandle(STD_ERROR_HANDLE);
     GetConsoleScreenBufferInfo(h_console, &console_default);
@@ -472,9 +477,37 @@ int main(int argc, char *argv[])
            goto avs_fail;
         }
 
+        #define simple_avs_exists(filter) {                                     \
+            if (!avs_h.func.avs_function_exists(avs_h.env, filter)) {           \
+                print_error("avs4x264 [error]: \"%s\" not found\n", filter);    \
+                goto avs_fail;                                                  \
+            }                                                                   \
+        }
+
+        #define abort_on_fail 1
+        #define print_on_success 2
+        #define print_and_break_on_success (2|4)
+        #define simple_avs_invoke(filter, action) {                     \
+            infile = argv[i];                                           \
+            arg = avs_new_value_string( infile );                       \
+            res = avs_h.func.avs_invoke(avs_h.env, filter, arg, NULL);  \
+            if( avs_is_error( res ) ) {                                 \
+                print_avs_error(res);                                   \
+                if (action & abort_on_fail)                             \
+                    goto avs_fail;                                      \
+            }                                                           \
+            else {                                                      \
+                if (action & print_on_success)                          \
+                    print_success();                                    \
+                if (action & print_and_break_on_success == print_and_break_on_success) \
+                    break;                                              \
+            }                                                           \
+        }
+
         for (i=1;i<argc;i++)
         {
             len =  strlen(argv[i]);
+            char *ext = strrchr(argv[i], '.');
 
             if ( !strncmp(argv[i], "--audiofile=", 12) || !strncmp(argv[i], "--output=", 9) )
                 continue;
@@ -485,225 +518,111 @@ int main(int argc, char *argv[])
                 i++;
                 continue;
             }
-            else if ( len>4 &&
-                 (argv[i][len-4])== '.' &&
-                 tolower(argv[i][len-3])== 'a' &&
-                 tolower(argv[i][len-2])== 'v' &&
-                 tolower(argv[i][len-1])== 's' )
+            else if (ext == NULL || strlen(ext) > 5)
             {
-                infile=argv[i];
-                arg = avs_new_value_string( infile );
-                res = avs_h.func.avs_invoke( avs_h.env, "Import", arg, NULL );
-                if( avs_is_error( res ) )
-                {
-                    print_error("avs [error]: %s\n", avs_as_string( res ) );
-                    goto avs_fail;
-                }
+                continue; // do nothing as the extension is either empty or too long
+            }
+            else if (strcasecmp(ext, ".avs") == 0)
+            {
+                simple_avs_invoke("Import", 0);
                 break;
             }
 
-            else if ( len>4 &&
-                      (argv[i][len-4])== '.' &&
-                      tolower(argv[i][len-3])== 'd' &&
-                      tolower(argv[i][len-2])== '2' &&
-                      tolower(argv[i][len-1])== 'v' )
+            else if (strcasecmp(ext, ".d2v") == 0)
             {
-                infile=argv[i];
                 filter = "MPEG2Source";
-                print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                if( !avs_h.func.avs_function_exists( avs_h.env, filter ) )
-                {
-                    print_error("avs4x264 [error]: \"%s\" not found\n", filter );
-                    goto avs_fail;
-                }
-                arg = avs_new_value_string( infile );
-                res = avs_h.func.avs_invoke( avs_h.env, filter, arg, NULL );
-                if( avs_is_error( res ) )
-                {
-                    print_error("avs [error]: %s\n", avs_as_string( res ) );
-                    goto avs_fail;
-                }
-                print_details("avs4x264 [info]: succeeded\n");
-                break;
+                print_trying(filter);
+                simple_avs_exists(filter);
+                simple_avs_invoke(filter, print_and_break_on_success | abort_on_fail);
             }
 
-            else if ( len>4 &&
-                      (argv[i][len-4])== '.' &&
-                      tolower(argv[i][len-3])== 'd' &&
-                      tolower(argv[i][len-2])== 'g' &&
-                      tolower(argv[i][len-1])== 'a' )
+            else if (strcasecmp(ext, ".dga") == 0)
             {
-                infile=argv[i];
                 filter = "AVCSource";
-                print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                if( !avs_h.func.avs_function_exists( avs_h.env, filter ) )
-                {
-                    print_error("avs4x264 [error]: \"%s\" not found\n", filter );
-                    goto avs_fail;
-                }
-                arg = avs_new_value_string( infile );
-                res = avs_h.func.avs_invoke( avs_h.env, filter, arg, NULL );
-                if( avs_is_error( res ) )
-                {
-                    print_error("avs [error]: %s\n", avs_as_string( res ) );
-                    goto avs_fail;
-                }
-                print_details("avs4x264 [info]: succeeded\n");
-                break;
+                print_trying(filter);
+                simple_avs_exists(filter);
+                simple_avs_invoke(filter, print_and_break_on_success | abort_on_fail);
             }
 
-            else if ( len>4 &&
-                      (argv[i][len-4])== '.' &&
-                      tolower(argv[i][len-3])== 'd' &&
-                      tolower(argv[i][len-2])== 'g' &&
-                      tolower(argv[i][len-1])== 'i' )
+            else if (strcasecmp(ext, ".dgi") == 0)
             {
-                infile=argv[i];
                 filter = "DGSource";
-                print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                if( !avs_h.func.avs_function_exists( avs_h.env, filter ) )
-                {
-                    print_error("avs4x264 [error]: \"%s\" not found\n", filter );
-                    goto avs_fail;
-                }
-                arg = avs_new_value_string( infile );
-                res = avs_h.func.avs_invoke( avs_h.env, filter, arg, NULL );
-                if( avs_is_error( res ) )
-                {
-                    print_error("avs [error]: %s\n", avs_as_string( res ) );
-                    goto avs_fail;
-                }
-                print_details("avs4x264 [info]: succeeded\n");
-                break;
+                print_trying(filter);
+                simple_avs_exists(filter);
+                simple_avs_invoke(filter, print_and_break_on_success | abort_on_fail);
             }
 
-            else if ( len>4 &&
-                      (argv[i][len-4])== '.' &&
-                      tolower(argv[i][len-3])== 'v' &&
-                      tolower(argv[i][len-2])== 'p' &&
-                      tolower(argv[i][len-1])== 'y' )
+            else if (strcasecmp(ext, ".vpy") == 0)
             {
-                infile=argv[i];
-
                 filter = "VSImport";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                    arg = avs_new_value_string( infile );
-                    res = avs_h.func.avs_invoke( avs_h.env, filter, arg, NULL );
-                    if( !avs_is_error( res ) )
-                    {
-                        print_details("avs4x264 [info]: succeeded\n");
-                        break;
-                    }
-                    else
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
+                    print_trying(filter);
+                    simple_avs_invoke(filter, print_and_break_on_success);
                 }
 
                 filter = "AVISource";
-                print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                arg = avs_new_value_string( infile );
-                res = avs_h.func.avs_invoke( avs_h.env, filter, arg, NULL );
-                if( !avs_is_error( res ) )
-                {
-                    print_details("avs4x264 [info]: succeeded\n");
-                    break;
-                }
-                else
-                    print_error("avs [error]: %s\n", avs_as_string( res ) );
+                print_trying(filter);
+                simple_avs_invoke(filter, print_and_break_on_success);
 
                 // Might be high bpp csp
                 filter = "HBVFWSource";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                    arg = avs_new_value_string( infile );
-                    res = avs_h.func.avs_invoke( avs_h.env, filter, arg, NULL );
-                    if( avs_is_error( res ) )
-                    {
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
-                        goto avs_fail;
-                    }
-                    else
-                    {
-                        print_details("avs4x264 [info]: succeeded\n");
-                        b_hbpp_vfw = 1;
-                        break;
-                    }
+                    print_trying(filter);
+                    simple_avs_invoke(filter, print_on_success | abort_on_fail);
+                    b_hbpp_vfw = 1;
+                    break;
                 }
             }
 
-            else if ( len>4 &&
-                      (argv[i][len-4])== '.' &&
-                      tolower(argv[i][len-3])== 'a' &&
-                      tolower(argv[i][len-2])== 'v' &&
-                      tolower(argv[i][len-1])== 'i' )
+            else if (strcasecmp(ext, ".avi") == 0)
             {
-                infile=argv[i];
-
                 filter = "AVISource";
-                print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                arg = avs_new_value_string( infile );
-                res = avs_h.func.avs_invoke( avs_h.env, filter, arg, NULL );
-                if( !avs_is_error( res ) )
-                {
-                    print_details("avs4x264 [info]: succeeded\n");
-                    break;
-                }
-                else
-                    print_error("avs [error]: %s\n", avs_as_string( res ) );
-
+                print_trying(filter);
+                simple_avs_invoke(filter, print_and_break_on_success);
                 goto source_lwl_ffms_general;
             }
 
-            else if ( ( len>5 && (argv[i][len-5])== '.' && (   ( tolower(argv[i][len-4])== 'm' && argv[i][len-3]== '2' && tolower(argv[i][len-2])== 't' && tolower(argv[i][len-1])== 's' )  // m2ts
-                                                            || ( tolower(argv[i][len-4])== 'm' && argv[i][len-3]== 'p' && tolower(argv[i][len-2])== 'e' && tolower(argv[i][len-1])== 'g' )  // mpeg
-                                                           )
-                      )
-                   || ( len>4 && (argv[i][len-4])== '.' && (   ( tolower(argv[i][len-3])== 'v' && tolower(argv[i][len-2])== 'o' && tolower(argv[i][len-1])== 'b' )                         // vob
-                                                            || ( tolower(argv[i][len-3])== 'm' && tolower(argv[i][len-2])== '2' && tolower(argv[i][len-1])== 'v' )                         // m2v
-                                                            || ( tolower(argv[i][len-3])== 'm' && tolower(argv[i][len-2])== 'p' && tolower(argv[i][len-1])== 'g' )                         // mpg
-                                                            || ( tolower(argv[i][len-3])== 'o' && tolower(argv[i][len-2])== 'g' && tolower(argv[i][len-1])== 'v' )                         // ogv
-                                                            || ( tolower(argv[i][len-3])== 'o' && tolower(argv[i][len-2])== 'g' && tolower(argv[i][len-1])== 'm' )                         // ogm
-                                                           )
-                      )
-                   || ( len>3 && (argv[i][len-3])== '.' && (   ( tolower(argv[i][len-2])== 't' && tolower(argv[i][len-1])== 's' )                                                           // ts
-                                                            || ( tolower(argv[i][len-2])== 't' && tolower(argv[i][len-1])== 'p' )                                                           // tp
-                                                            || ( tolower(argv[i][len-2])== 'p' && tolower(argv[i][len-1])== 's' )                                                           // ps
-                                                           )
-                      )
-                    )                                               /* We don't trust ffms's non-linear seeking for these formats */
+            else if (strcasecmp(ext, ".m2ts") == 0
+                  || strcasecmp(ext, ".mpeg") == 0
+                  || strcasecmp(ext, ".vob") == 0
+                  || strcasecmp(ext, ".mpg") == 0
+                  || strcasecmp(ext, ".ogv") == 0
+                  || strcasecmp(ext, ".ogm") == 0
+                  || strcasecmp(ext, ".ts") == 0
+                  || strcasecmp(ext, ".tp") == 0
+                  || strcasecmp(ext, ".ps") == 0) /* We don't trust ffms's non-linear seeking for these formats */
             {
-                infile=argv[i];
+                infile = argv[i];
 
                 filter = "LWLibavVideoSource";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                    print_details("avs4x264 [info]: indexing...\n");
+                    print_trying(filter);
+                    print_indexing();
                     AVS_Value arg_arr[] = { avs_new_value_string( infile ), avs_new_value_int( 1 ) };
                     const char *arg_name[] = { "source", "threads" };
                     res = avs_h.func.avs_invoke( avs_h.env, filter, avs_new_value_array( arg_arr, 2 ), arg_name );
                     if( !avs_is_error( res ) )
                     {
-                        print_details("avs4x264 [info]: succeeded\n" );
+                        print_success();
                         break;
                     }
-                    else
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
+                    print_avs_error(res);
                 }
 
                 filter = "FFIndex";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"FFVideoSource\"\n" );
-                    print_details("avs4x264 [info]: indexing...\n");
+                    print_trying("FFVideoSource");
+                    print_indexing();
                     AVS_Value arg_arr[] = { avs_new_value_string( infile ), avs_new_value_string( "lavf" ) };
                     const char *arg_name[] = { "source", "demuxer" };
                     res = avs_h.func.avs_invoke( avs_h.env, filter, avs_new_value_array( arg_arr, 2 ), arg_name );
                     if( avs_is_error( res ) )
                     {
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
+                        print_avs_error(res);
                         goto source_dss;
                     }
                 }
@@ -718,12 +637,12 @@ int main(int argc, char *argv[])
                     res = avs_h.func.avs_invoke( avs_h.env, filter, avs_new_value_array( arg_arr, 3 ), arg_name );
                     if( avs_is_error( res ) )
                     {
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
+                        print_avs_error(res);
                         goto source_dss;
                     }
                     else
                     {
-                        print_details("avs4x264 [info]: succeeded\n" );
+                        print_success();
                         print_details("avs4x264 [info]: No safe non-linear seeking guaranteed for input file, force seek-mode=safe\n");
                         b_seek_safe = 1;
                     }
@@ -733,33 +652,30 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            else if ( ( len>4 && (argv[i][len-4])== '.' && (   ( tolower(argv[i][len-3])== 'm' && tolower(argv[i][len-2])== 'p' && tolower(argv[i][len-1])== '4' )  // mp4
-                                                            || ( tolower(argv[i][len-3])== 'm' && tolower(argv[i][len-2])== '4' && tolower(argv[i][len-1])== 'v' )  // m4v
-                                                            || ( tolower(argv[i][len-3])== 'm' && tolower(argv[i][len-2])== 'o' && tolower(argv[i][len-1])== 'v' )  // mov
-                                                            || ( tolower(argv[i][len-3])== '3' && tolower(argv[i][len-2])== 'g' && tolower(argv[i][len-1])== 'p' )  // 3gp
-                                                            || ( tolower(argv[i][len-3])== '3' && tolower(argv[i][len-2])== 'g' && tolower(argv[i][len-1])== '2' )  // 3g2
-                                                           )
-                      )
-                   || ( len>3 && (argv[i][len-3])== '.' && tolower(argv[i][len-2])== 'q' && tolower(argv[i][len-2])== 't' )                                         // qt
-                    )                                              /* LSMASHVideoSource works perfect for them */
+            else if (strcasecmp(ext, ".mp4") == 0
+                  || strcasecmp(ext, ".m4v") == 0
+                  || strcasecmp(ext, ".mov") == 0
+                  || strcasecmp(ext, ".3gp") == 0
+                  || strcasecmp(ext, ".3g2") == 0
+                  || strcasecmp(ext, ".qt") == 0) /* LSMASHVideoSource works perfect for them */
             {
-                infile=argv[i];
+                infile = argv[i];
                 filter = "LSMASHVideoSource";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                    print_details("avs4x264 [info]: indexing...\n");
+                    print_trying(filter);
+                    print_indexing();
                     AVS_Value arg_arr[] = { avs_new_value_string( infile ), avs_new_value_int( 1 ) };
                     const char *arg_name[] = { "source", "threads" };
                     res = avs_h.func.avs_invoke( avs_h.env, filter, avs_new_value_array( arg_arr, 2 ), arg_name );
                     if( avs_is_error( res ) )
                     {
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
+                        print_avs_error(res);
                         goto source_lwl_ffms_general;
                     }
                     else
                     {
-                        print_details("avs4x264 [info]: succeeded\n" );
+                        print_success();
                         break;
                     }
                 }
@@ -767,105 +683,82 @@ int main(int argc, char *argv[])
                     goto source_lwl_ffms_general;
             }
 
-            else if ( ( len>4 && (argv[i][len-4])== '.' && (   ( tolower(argv[i][len-3])== 'm' && tolower(argv[i][len-2])== 'k' && tolower(argv[i][len-1])== 'v' )  // mkv
-                                                            || ( tolower(argv[i][len-3])== 'f' && tolower(argv[i][len-2])== 'l' && tolower(argv[i][len-1])== 'v' )  // flv
-                                                           )
-                      )
-                   || ( len>5 && (argv[i][len-5])== '.' && tolower(argv[i][len-4])== 'w' && tolower(argv[i][len-3])== 'e' && tolower(argv[i][len-2])== 'b' && tolower(argv[i][len-1])== 'm' )  // webm
-                    )                                              /* Non-linear seeking seems to be reliable for these formats */
+            else if (strcasecmp(ext, ".mkv") == 0
+                  || strcasecmp(ext, ".flv") == 0
+                  || strcasecmp(ext, ".webm") == 0) /* Non-linear seeking seems to be reliable for these formats */
             {
-                infile=argv[i];
+                infile = argv[i];
 source_lwl_ffms_general:
 
                 filter = "LWLibavVideoSource";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                    print_details("avs4x264 [info]: indexing...\n");
+                    print_trying(filter);
+                    print_indexing();
                     AVS_Value arg_arr[] = { avs_new_value_string( infile ), avs_new_value_int( 1 ) };
                     const char *arg_name[] = { "source", "threads" };
                     res = avs_h.func.avs_invoke( avs_h.env, filter, avs_new_value_array( arg_arr, 2 ), arg_name );
                     if( !avs_is_error( res ) )
                     {
-                        print_details("avs4x264 [info]: succeeded\n" );
+                        print_success();
                         break;
                     }
                     else
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
+                        print_avs_error(res);
                 }
 
                 filter = "FFVideoSource";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                    print_details("avs4x264 [info]: indexing...\n");
+                    print_trying(filter);
+                    print_indexing();
                     AVS_Value arg_arr[] = { avs_new_value_string( infile ), avs_new_value_int( 1 ) };
                     const char *arg_name[] = { "source", "threads" };
                     res = avs_h.func.avs_invoke( avs_h.env, filter, avs_new_value_array( arg_arr, 2 ), arg_name );
                     if( avs_is_error( res ) )
                     {
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
+                        print_avs_error(res);
                         goto source_dss;
                     }
                     else
                     {
-                        print_details("avs4x264 [info]: succeeded\n" );
+                        print_success();
                         break;
                     }
                 }
                     goto source_dss;
             }
 
-            else if ( ( len>5 && (argv[i][len-5])== '.' && (   ( tolower(argv[i][len-4])== 'r' && argv[i][len-3]== 'm' && tolower(argv[i][len-2])== 'v' && tolower(argv[i][len-1])== 'b' )  // rmvb
-                                                            || ( tolower(argv[i][len-4])== 'd' && argv[i][len-3]== 'i' && tolower(argv[i][len-2])== 'v' && tolower(argv[i][len-1])== 'x' )  // divx
-                                                           )
-                      )
-                   || ( len>4 && (argv[i][len-4])== '.' && (   ( tolower(argv[i][len-3])== 'w' && tolower(argv[i][len-2])== 'm' && tolower(argv[i][len-1])== 'v' )                         // wmv
-                                                            || ( tolower(argv[i][len-3])== 'w' && tolower(argv[i][len-2])== 'm' && tolower(argv[i][len-1])== 'p' )                         // wmp
-                                                            || ( tolower(argv[i][len-3])== 'a' && tolower(argv[i][len-2])== 's' && tolower(argv[i][len-1])== 'f' )                         // asf
-                                                           )
-                      )
-                   || ( len>3 && (argv[i][len-3])== '.' && (   ( tolower(argv[i][len-2])== 'r' && tolower(argv[i][len-1])== 'm' )                                                           // rm
-                                                            || ( tolower(argv[i][len-2])== 'w' && tolower(argv[i][len-1])== 'm' )                                                           // wm
-                                                           )
-                      )
-                    )                                              /* Only use DSS2/DirectShowSource for these formats */
+            else if (strcasecmp(ext, ".rmvb") == 0
+                  || strcasecmp(ext, ".divx") == 0
+                  || strcasecmp(ext, ".wmv") == 0
+                  || strcasecmp(ext, ".wmp") == 0
+                  || strcasecmp(ext, ".asf") == 0
+                  || strcasecmp(ext, ".rm") == 0
+                  || strcasecmp(ext, ".wm") == 0) /* Only use DSS2/DirectShowSource for these formats */
             {
-                infile=argv[i];
+                infile = argv[i];
 source_dss:
                 filter = "DSS2";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"%s\"\n", filter );
-                    arg = avs_new_value_string( infile );
-                    res = avs_h.func.avs_invoke( avs_h.env, filter, arg, NULL );
-                    if( avs_is_error( res ) )
-                    {
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
-                    }
-                    else
-                    {
-                        print_details("avs4x264 [info]: succeeded\n" );
-                        break;
-                    }
+                    print_trying(filter);
+                    simple_avs_invoke(filter, print_and_break_on_success);
                 }
 
                 filter = "DirectShowSource";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
-                    print_details("avs4x264 [info]: trying \"%s\"\n", filter );
+                    print_trying(filter);
                     AVS_Value arg_arr[] = { avs_new_value_string( infile ), avs_new_value_bool( 0 ) };
                     const char *arg_name[] = { NULL, "audio" };
                     res = avs_h.func.avs_invoke( avs_h.env, filter, avs_new_value_array( arg_arr, 2 ), arg_name );
-                    if( avs_is_error( res ) )
+                    if( !avs_is_error( res ) )
                     {
-                        print_error("avs [error]: %s\n", avs_as_string( res ) );
-                    }
-                    else
-                    {
-                        print_details("avs4x264 [info]: succeeded\n" );
+                        print_success();
                         break;
                     }
+                    print_avs_error(res);
                 }
 
                 goto avs_fail;
@@ -904,7 +797,7 @@ source_dss:
         // avs_version_number = get_avs_version_number( avs_h );
         // print_details("avs [info]: AviSynth version: %.2f\n", avs_version_number );
         avs_version_string = get_avs_version_string( avs_h );
-        print_colored(CONSOLE_WHITE,"avs [info]: %s\n", avs_version_string );
+        print_colored(CONSOLE_WHITE, "avs [info]: %s\n", avs_version_string );
         const AVS_VideoInfo *vi = avs_h.func.avs_get_video_info( avs_h.clip );
         if( !avs_has_video( vi ) )
         {
@@ -929,18 +822,18 @@ source_dss:
             csp = "i444";
             chroma_width = vi->width;
             chroma_height = vi->height;
-			csp_human = "YV24";
+            csp_human = "YV24";
         }
         else if ( avs_is_yv16( vi ) )
         {
             csp = "i422";
             chroma_width = vi->width >> 1;
             chroma_height = vi->height;
-			csp_human = "YV16";
+            csp_human = "YV16";
         }
         else
         {
-            print_warning("avs [warning]: Converting input clip to YV12\n");
+            print_warning("avs [warning]: Converting input clip to YV12\n" );
             const char *arg_name[2] = { NULL, "interlaced" };
             AVS_Value arg_arr[2] = { res, avs_new_value_bool( b_interlaced ) };
             AVS_Value res2 = avs_h.func.avs_invoke( avs_h.env, "ConvertToYV12", avs_new_value_array( arg_arr, 2 ), arg_name );
@@ -951,7 +844,7 @@ source_dss:
             }
             res = update_clip( avs_h, vi, res2, res );
             csp = "i420";
-			csp_human = "YV12";
+            csp_human = "YV12";
             chroma_width = vi->width >> 1;
             chroma_height = vi->height >> 1;
         }
@@ -1119,14 +1012,14 @@ source_dss:
             const char *err = avs_h.func.avs_clip_get_error( avs_h.clip );
             if( err )
             {
-                print_error("avs [error]: %s occurred while reading frame %d\n", err, frame );
+                print_error("\navs [error]: %s occurred while reading frame %d\n", err, frame );
                 goto process_fail;
             }
             planeY = (char*)(frm->vfb->data + frm->offset);
             for (j=0; j<i_height; j++){
                if( !WriteFile(h_pipeWrite, planeY, i_width, (PDWORD)&i, NULL) )
                {
-                   print_error("avs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
+                   print_error("\navs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
                    goto process_fail;
                }
                planeY += frm->pitch;
@@ -1135,7 +1028,7 @@ source_dss:
             for (j=0; j<chroma_height; j++){
                if( !WriteFile(h_pipeWrite, planeU, chroma_width, (PDWORD)&i, NULL) )
                {
-                   print_error("avs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
+                   print_error("\navs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
                    goto process_fail;
                }
                planeU += frm->pitchUV;
@@ -1144,7 +1037,7 @@ source_dss:
             for (j=0; j<chroma_height; j++){
                if( !WriteFile(h_pipeWrite, planeV, chroma_width, (PDWORD)&i, NULL) )
                {
-                   print_error("avs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
+                   print_error("\navs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
                    goto process_fail;
                }
                planeV += frm->pitchUV;
