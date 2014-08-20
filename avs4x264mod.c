@@ -524,7 +524,8 @@ int main(int argc, char *argv[])
             }
             else if (strcasecmp(ext, ".avs") == 0)
             {
-                simple_avs_invoke("Import", 0);
+                print_details("avs4x264 [info]: opening as AviSynth script\n");
+                simple_avs_invoke("Import", abort_on_fail);
                 break;
             }
 
