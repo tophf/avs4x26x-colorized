@@ -486,7 +486,8 @@ int main(int argc, char *argv[])
 
         #define abort_on_fail 1
         #define print_on_success 2
-        #define print_and_break_on_success (2|4)
+        #define break_on_success 4
+        #define print_and_break_on_success (print_on_success|break_on_success)
         #define simple_avs_invoke(filter, action) {                     \
             infile = argv[i];                                           \
             arg = avs_new_value_string( infile );                       \
@@ -499,7 +500,7 @@ int main(int argc, char *argv[])
             else {                                                      \
                 if (action & print_on_success)                          \
                     print_success();                                    \
-                if (action & print_and_break_on_success == print_and_break_on_success) \
+                if (action & break_on_success)                          \
                     break;                                              \
             }                                                           \
         }
