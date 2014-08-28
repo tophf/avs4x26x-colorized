@@ -5,8 +5,8 @@
 // (at your option) any later version.
 
 #define VERSION_MAJOR  0
-#define VERSION_MINOR  9
-#define VERSION_BUGFIX 1
+#define VERSION_MINOR  10
+#define VERSION_BUGFIX 0
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +25,8 @@
 #include "avisynth_c.h"
 #include "version.h"
 
-#define DEFAULT_BINARY_PATH "x264_64"
+#define DEFAULT_X264_BINARY_PATH "x264_64"
+#define DEFAULT_X265_BINARY_PATH "x265"
 
 #define PIPE_BUFFER_SIZE (DWORD)0//1048576 // values bigger than 250000 break the application
 
@@ -96,9 +97,9 @@ void print_colored(WORD color, const char *msg, ...)
 #define print_details(...) print_colored(CONSOLE_DARKCYAN, ##__VA_ARGS__)
 #define print_info(...)    print_colored(CONSOLE_CYAN, ##__VA_ARGS__)
 
-#define print_trying(filter) print_details("avs4x264 [info]: trying \"%s\"\n", filter);
-#define print_indexing()     print_details("avs4x264 [info]: indexing...\n");
-#define print_success()      print_details("avs4x264 [info]: succeeded\n" );
+#define print_trying(filter) print_details("avs4x26x [info]: trying \"%s\"\n", filter);
+#define print_indexing()     print_details("avs4x26x [info]: indexing...\n");
+#define print_success()      print_details("avs4x26x [info]: succeeded\n" );
 #define print_avs_error(res) print_colored(CONSOLE_RED, "avs [error]: %s\n", avs_as_string(res));
 
 /* load the library and functions we require from it */
@@ -185,7 +186,18 @@ static AVS_Value update_clip( avs_hnd_t avs_h, const AVS_VideoInfo *vi, AVS_Valu
     return res;
 }
 
-char* generate_new_commandline(int argc, char *argv[], int b_hbpp_vfw, int i_frame_total, int i_fps_num, int i_fps_den, int i_width, int i_height, char* infile, const char* csp, int b_tc, int i_encode_frames )
+#define AUTO_LOAD_PLUGINS \
+/* AviSynth+ need explicit invoke of AutoloadPlugins() for registering plugins functions */             \
+if( avs_h.func.avs_function_exists( avs_h.env, "AutoloadPlugins" ) )                                    \
+{                                                                                                       \
+    res = avs_h.func.avs_invoke( avs_h.env, "AutoloadPlugins", avs_new_value_array( NULL, 0 ), NULL );  \
+    if( avs_is_error( res ) )                                                                           \
+        fprintf( stderr, "AutoloadPlugins failed: %s\n", avs_as_string( res ) );                        \
+}
+
+char* generate_new_commandline(int argc, char *argv[], int b_hbpp_vfw, int i_frame_total,
+                              int i_fps_num, int i_fps_den, int i_width, int i_height, char* infile,
+                              const char* csp, int b_tc, int i_encode_frames, int b_x265 )
 {
     int i;
     char *cmd, *buf;
@@ -193,39 +205,44 @@ char* generate_new_commandline(int argc, char *argv[], int b_hbpp_vfw, int i_fra
     int b_add_csp      = 1;
     int b_add_res      = 1;
     int b_add_timebase = b_tc;
-    char *x264_binary;
-    x264_binary = DEFAULT_BINARY_PATH;
+    char *x26x_binary;
+    x26x_binary = b_x265 ? DEFAULT_X265_BINARY_PATH : DEFAULT_X264_BINARY_PATH;
     buf = malloc(20);
     *buf=0;
     cmd = malloc(8192);
     for (i=1;i<argc;i++)
     {
-        if( !strncmp(argv[i], "--x264-binary", 13) || !strncmp(argv[i], "-L", 2) )
+        if( !strncmp(argv[i], "--x26x-binary", 13) || !strncmp(argv[i], "-L", 2) ||
+            !strncmp(argv[i], "--x264-binary", 13) || !strncmp(argv[i], "--x265-binary", 13)
+            /* preserved for legacy usage */
+          )
         {
-            if( !strcmp(argv[i], "--x264-binary") || !strcmp(argv[i], "-L") )
+            if( !strcmp(argv[i], "--x26x-binary") || !strcmp(argv[i], "-L") ||
+                !strcmp(argv[i], "--x264-binary") || !strcmp(argv[i], "--x265-binary") )
             {
-                x264_binary = argv[i+1];
+                x26x_binary = argv[i+1];
                 for (int k=i;k<argc-2;k++)
                     argv[k] = argv[k+2];
                 argc -= 2;
             }
-            else if( !strncmp(argv[i], "--x264-binary=", 14) )
+            else if( !strncmp(argv[i], "--x26x-binary=", 14) ||
+                     !strncmp(argv[i], "--x264-binary=", 14) || !strncmp(argv[i], "--x265-binary=", 14) )
             {
-                x264_binary = argv[i]+14;
+                x26x_binary = argv[i]+14;
                 for (int k=i;k<argc-1;k++)
                     argv[k] = argv[k+1];
                 argc--;
             }
             else if( !strncmp(argv[i], "-L=", 3) )
             {
-                x264_binary = argv[i]+3;
+                x26x_binary = argv[i]+3;
                 for (int k=i;k<argc-1;k++)
                     argv[k] = argv[k+1];
                 argc--;
             }
-            else                           /* else argv[i] should have structure like -Lx264 */
+            else                           /* else argv[i] should have structure like -Lx26x */
             {
-                x264_binary = argv[i]+2;
+                x26x_binary = argv[i]+2;
                 for (int k=i;k<argc-1;k++)
                     argv[k] = argv[k+1];
                 argc--;
@@ -277,7 +294,7 @@ char* generate_new_commandline(int argc, char *argv[], int b_hbpp_vfw, int i_fra
 #define FIND_HBPP                                                                  \
 {                                                                                  \
   i_width >>= 1;                                                                   \
-  print_info("avs4x264 [info]: High bit depth detected, resolution corrected\n" ); \
+  print_info("avs4x26x [info]: High bit depth detected, resolution corrected\n" ); \
   break;                                                                           \
 }
         if( b_hbpp_vfw == 1 )
@@ -296,7 +313,7 @@ char* generate_new_commandline(int argc, char *argv[], int b_hbpp_vfw, int i_fra
 #undef FIND_HBPP
     }
 
-    sprintf(cmd, "\"%s\" - ", x264_binary);
+    sprintf(cmd, "\"%s\" - ", x26x_binary);
 
     for (i=1;i<argc;i++)
     {
@@ -350,7 +367,7 @@ char* generate_new_commandline(int argc, char *argv[], int b_hbpp_vfw, int i_fra
 int main(int argc, char *argv[])
 {
     //avs related
-    avs_hnd_t avs_h;
+    avs_hnd_t avs_h = {0};
     AVS_Value arg;
     AVS_Value res;
     char *filter = NULL;
@@ -358,7 +375,7 @@ int main(int argc, char *argv[])
     const char *avs_version_string;
     AVS_VideoFrame *frm;
     //createprocess related
-    HANDLE h_process, h_stdOut, h_stdErr, h_pipeRead, h_pipeWrite;
+    HANDLE /*h_process, */ h_stdOut, h_stdErr, h_pipeRead, h_pipeWrite;
     SECURITY_ATTRIBUTES saAttr;
     STARTUPINFO si_info;
     PROCESS_INFORMATION pi_info;
@@ -377,12 +394,13 @@ int main(int argc, char *argv[])
     int b_seek_safe=0;
     int b_change_frame_total=0;
     int i_encode_frames;
+    int b_x265=0;
     /*Video Info End*/
-    char *planeY, *planeU, *planeV;
+    char *plane;
     unsigned int frame,len,chroma_height,chroma_width;
     int i,j;
     char *cmd;
-    char *infile = NULL;
+    char *infile = NULL, *outfile = NULL;
     const char *csp = NULL;
     const char *csp_human = NULL;
 
@@ -434,7 +452,7 @@ int main(int argc, char *argv[])
                     }
                     else
                     {
-                        print_error("avs4x264 [error]: invalid seek-mode\n" );
+                        print_error("avs4x26x [error]: invalid seek-mode\n" );
                         return -1;
                     }
                     for (int k=i;k<argc-2;k++)
@@ -453,7 +471,7 @@ int main(int argc, char *argv[])
                     }
                     else
                     {
-                        print_error("avs4x264 [error]: invalid seek-mode\n" );
+                        print_error("avs4x26x [error]: invalid seek-mode\n" );
                         return -1;
                     }
                     for (int k=i;k<argc-1;k++)
@@ -479,7 +497,7 @@ int main(int argc, char *argv[])
 
         #define simple_avs_exists(filter) {                                     \
             if (!avs_h.func.avs_function_exists(avs_h.env, filter)) {           \
-                print_error("avs4x264 [error]: \"%s\" not found\n", filter);    \
+                print_error("avs4x26x [error]: \"%s\" not found\n", filter);    \
                 goto avs_fail;                                                  \
             }                                                                   \
         }
@@ -525,13 +543,14 @@ int main(int argc, char *argv[])
             }
             else if (strcasecmp(ext, ".avs") == 0)
             {
-                print_details("avs4x264 [info]: opening as AviSynth script\n");
+                print_details("avs4x26x [info]: opening as AviSynth script\n");
                 simple_avs_invoke("Import", abort_on_fail);
                 break;
             }
 
             else if (strcasecmp(ext, ".d2v") == 0)
             {
+                AUTO_LOAD_PLUGINS
                 filter = "MPEG2Source";
                 print_trying(filter);
                 simple_avs_exists(filter);
@@ -540,6 +559,7 @@ int main(int argc, char *argv[])
 
             else if (strcasecmp(ext, ".dga") == 0)
             {
+                AUTO_LOAD_PLUGINS
                 filter = "AVCSource";
                 print_trying(filter);
                 simple_avs_exists(filter);
@@ -548,7 +568,15 @@ int main(int argc, char *argv[])
 
             else if (strcasecmp(ext, ".dgi") == 0)
             {
+                AUTO_LOAD_PLUGINS
                 filter = "DGSource";
+                if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
+                {
+                    print_trying(filter);
+                    simple_avs_invoke(filter, print_and_break_on_success);
+                }
+
+                filter = "DGSourceIM";
                 print_trying(filter);
                 simple_avs_exists(filter);
                 simple_avs_invoke(filter, print_and_break_on_success | abort_on_fail);
@@ -557,12 +585,14 @@ int main(int argc, char *argv[])
             else if (strcasecmp(ext, ".vpy") == 0)
             {
                 filter = "VSImport";
+                AUTO_LOAD_PLUGINS
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
                     print_trying(filter);
                     simple_avs_invoke(filter, print_and_break_on_success);
                 }
 
+                AUTO_LOAD_PLUGINS
                 filter = "AVISource";
                 print_trying(filter);
                 simple_avs_invoke(filter, print_and_break_on_success);
@@ -598,6 +628,7 @@ int main(int argc, char *argv[])
             {
                 infile = argv[i];
 
+                AUTO_LOAD_PLUGINS
                 filter = "LWLibavVideoSource";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
@@ -645,7 +676,7 @@ int main(int argc, char *argv[])
                     else
                     {
                         print_success();
-                        print_details("avs4x264 [info]: No safe non-linear seeking guaranteed for input file, force seek-mode=safe\n");
+                        print_details("avs4x26x [info]: No safe non-linear seeking guaranteed for input file, force seek-mode=safe\n");
                         b_seek_safe = 1;
                     }
                 }
@@ -662,6 +693,7 @@ int main(int argc, char *argv[])
                   || strcasecmp(ext, ".qt") == 0) /* LSMASHVideoSource works perfect for them */
             {
                 infile = argv[i];
+                AUTO_LOAD_PLUGINS
                 filter = "LSMASHVideoSource";
                 if( avs_h.func.avs_function_exists( avs_h.env, filter ) )
                 {
@@ -689,6 +721,7 @@ int main(int argc, char *argv[])
                   || strcasecmp(ext, ".flv") == 0
                   || strcasecmp(ext, ".webm") == 0) /* Non-linear seeking seems to be reliable for these formats */
             {
+                AUTO_LOAD_PLUGINS
                 infile = argv[i];
 source_lwl_ffms_general:
 
@@ -739,6 +772,7 @@ source_lwl_ffms_general:
                   || strcasecmp(ext, ".rm") == 0
                   || strcasecmp(ext, ".wm") == 0) /* Only use DSS2/DirectShowSource for these formats */
             {
+                AUTO_LOAD_PLUGINS
                 infile = argv[i];
 source_dss:
                 filter = "DSS2";
@@ -771,12 +805,33 @@ source_dss:
 
         if (!infile)
         {
-            print_error("avs4x264 [error]: No supported input file found.\n");
+            print_error("avs4x26x [error]: No supported input file found.\n");
             goto avs_fail;
         }
 
+        for (i=1;i<argc;i++)
+        {
+            if( !strncmp(argv[i], "--output", 8) || !strncmp(argv[i], "-o", 2) )
+            {
+                if( !strcmp(argv[i], "--output") || !strcmp(argv[i], "-o") )
+                    outfile = argv[i+1];
+                else if( !strncmp(argv[i], "--output=", 9) )
+                    outfile = argv[i]+9;
+                else if( !strncmp(argv[i], "-o=", 3) )
+                    outfile = argv[i]+3;
+                else    /* else argv[i] should have structure like -ofilename */
+                    outfile = argv[i]+2;
+            }
+        }
+        if (outfile && strlen(outfile)>5)
+        {
+            char *outext = strrchr(outfile, '.');
+            if ( !strcasecmp(outext, ".hevc") || !strcasecmp(outext, ".h265") || !strcasecmp(outext, ".265" ) )
+                b_x265 = 1;
+        }
+
         if (filter)
-            print_info("avs4x264 [info]: using \"%s\" as source filter\n", filter );
+            print_info("avs4x26x [info]: using \"%s\" as source filter\n", filter );
 
         /* check if the user is using a multi-threaded script and apply distributor if necessary.
            adapted from avisynth's vfw interface */
@@ -881,7 +936,7 @@ source_dss:
         }
         if ( !b_seek_safe && i_frame_start && ( b_qp || b_tc ) )
         {
-            print_info("avs4x264 [info]: seek-mode=fast with qpfile or timecodes in, freeze first %d %s for fast processing\n", i_frame_start, i_frame_start==1 ? "frame" : "frames" );
+            print_info("avs4x26x [info]: seek-mode=fast with qpfile or timecodes in, freeze first %d %s for fast processing\n", i_frame_start, i_frame_start==1 ? "frame" : "frames" );
             AVS_Value arg_arr[4] = { res, avs_new_value_int( 0 ), avs_new_value_int( i_frame_start ), avs_new_value_int( i_frame_start ) };
             AVS_Value res2 = avs_h.func.avs_invoke( avs_h.env, "FreezeFrame", avs_new_value_array( arg_arr, 4 ), NULL );
             if( avs_is_error( res2 ) )
@@ -917,7 +972,7 @@ source_dss:
                  i_width, i_height, csp_human, i_fps_num, i_fps_den, i_frame_total);
 
         //execute the commandline
-        h_process = GetCurrentProcess();
+        //h_process = GetCurrentProcess();
         h_stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
         h_stdErr = GetStdHandle(STD_ERROR_HANDLE);
 
@@ -978,7 +1033,7 @@ source_dss:
 
         if ( vi->num_frames < i_frame_total )
         {
-            print_warning("avs4x264 [warning]: x264 is trying to encode until frame %d, but input clip has only %d %s\n",
+            print_warning("avs4x26x [warning]: x26x is trying to encode until frame %d, but input clip has only %d %s\n",
                      i_frame_total, vi->num_frames, vi->num_frames > 1 ? "frames" : "frame" );
             i_frame_total = vi->num_frames;
         }
@@ -991,11 +1046,11 @@ source_dss:
         }
         else if ( i_frame_start != 0 )
         {
-            print_details("avs4x264 [info]: Convert \"--seek %d\" to internal frame skipping\n", i_frame_start );
+            print_details("avs4x26x [info]: Convert \"--seek %d\" to internal frame skipping\n", i_frame_start );
         }
 
-        cmd = generate_new_commandline(argc, argv, b_hbpp_vfw, i_frame_total, i_fps_num, i_fps_den, i_width, i_height, infile, csp, b_tc, i_encode_frames );
-        print_colored(CONSOLE_DARKGRAY, "avs4x264 [info]: %s\n", cmd);
+        cmd = generate_new_commandline(argc, argv, b_hbpp_vfw, i_frame_total, i_fps_num, i_fps_den, i_width, i_height, infile, csp, b_tc, i_encode_frames, b_x265 );
+        print_colored(CONSOLE_DARKGRAY, "avs4x26x [info]: %s\n", cmd);
 
         if (!CreateProcess(NULL, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si_info, &pi_info))
         {
@@ -1017,47 +1072,39 @@ source_dss:
                 print_error("\navs [error]: %s occurred while reading frame %d\n", err, frame );
                 goto process_fail;
             }
-            planeY = (char*)(frm->vfb->data + frm->offset);
-            for (j=0; j<i_height; j++){
-               if( !WriteFile(h_pipeWrite, planeY, i_width, (PDWORD)&i, NULL) )
-               {
-                   print_error("\navs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
-                   goto process_fail;
-               }
-               planeY += frm->pitch;
-            }
-            planeU = (char*)(frm->vfb->data + frm->offsetU);
-            for (j=0; j<chroma_height; j++){
-               if( !WriteFile(h_pipeWrite, planeU, chroma_width, (PDWORD)&i, NULL) )
-               {
-                   print_error("\navs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
-                   goto process_fail;
-               }
-               planeU += frm->pitchUV;
-            }
-            planeV = (char*)(frm->vfb->data + frm->offsetV);
-            for (j=0; j<chroma_height; j++){
-               if( !WriteFile(h_pipeWrite, planeV, chroma_width, (PDWORD)&i, NULL) )
-               {
-                   print_error("\navs [error]: Error occurred while writing frame %d\n(Maybe x264 closed)\n", frame );
-                   goto process_fail;
-               }
-               planeV += frm->pitchUV;
-            }
+
+            #define write_plane(offset, width, height, pitch)                                   \
+                plane = (char*)(frm->vfb->data + offset);                                       \
+                for (j=0; j<height; j++) {                                                      \
+                   if( !WriteFile(h_pipeWrite, plane, width, (PDWORD)&i, NULL) ) {              \
+                       print_error("\navs [error]: Error occurred while writing frame %d\n" \
+                                   "(Maybe x26x closed)\n", frame );                            \
+                       goto process_fail;                                                       \
+                   }                                                                            \
+                   plane += pitch;                                                              \
+                }
+
+            write_plane(frm->offset, i_width, i_height, frm->pitch);
+            write_plane(frm->offsetU, chroma_width, chroma_height, frm->pitchUV);
+            write_plane(frm->offsetV, chroma_width, chroma_height, frm->pitchUV);
             avs_h.func.avs_release_video_frame( frm );
         }
         //close & cleanup
-    process_fail:// everything created
+
+    process_fail: // everything created
         CloseHandle(h_pipeWrite);// h_pipeRead already closed
         WaitForSingleObject(pi_info.hProcess, INFINITE);
         GetExitCodeProcess(pi_info.hProcess,&exitcode);
         CloseHandle(pi_info.hProcess);
         goto avs_cleanup;// pipes already closed
-    pipe_fail://pipe created but failed after that
+
+    pipe_fail: //pipe created but failed after that
         CloseHandle(h_pipeRead);
         CloseHandle(h_pipeWrite);
-    avs_fail://avs enviormnet created but failed after that
+
+    avs_fail: //avs environmet created but failed after that
         exitcode = -1;
+
     avs_cleanup:
         avs_h.func.avs_release_clip( avs_h.clip );
         if( avs_h.func.avs_delete_script_environment )
@@ -1067,16 +1114,18 @@ source_dss:
     else
     {
         printf("\n"
-               "avs4x264mod - simple AviSynth pipe tool for x264\n"
-               "Version: %d.%d.%d.%d, built on %s, %s\n\n", VERSION_MAJOR, VERSION_MINOR, VERSION_BUGFIX, VERSION_GIT, __DATE__, __TIME__);
-        printf("Usage: avs4x264mod [avs4x264mod options] [x264 options] <input>\n"
+               "avs4x26x - simple AviSynth pipe tool for x262/x264/x265\n"
+               "Version: %d.%d.%d.%d-colorized, built on %s, %s\n\n",
+               VERSION_MAJOR, VERSION_MINOR, VERSION_BUGFIX, VERSION_GIT, __DATE__, __TIME__);
+        printf("Usage: avs4x26x [avs4x26x options] [x26x options] -o <output> <input>\n"
                "\n"
                "Supported input formats:\n"
                "     .avs\n"
                "     .d2v: requires DGDecode.dll\n"
                "     .dga: requires DGAVCDecode.dll\n"
-               "     .dgi: requires DGAVCDecodeDI.dll or DGDecodeNV.dll according to dgi file\n"
+               "     .dgi: requires DGAVCDecodeDI.dll, DGDecodeNV.dll or DGDecodeIM.dll according to dgi file\n"
                "     .vpy: try to use VSImport -> AVISource -> HBVFWSource\n"
+               "           (VSImport requires VapourSource.dll)\n"
                "           (HBVFWSource requires HBVFWSource.dll, and will force input-depth=16)\n"
                "     .avi: try to use AVISource -> LWLibavVideoSource -> FFVideoSource(normal)\n"
                "                      -> DSS2 -> DirectShowSource\n"
@@ -1093,20 +1142,25 @@ source_dss:
                "                      -> DirectShowSource\n"
                "     .rmvb/.divx/.wmv/.wmp/.asf/.rm/.wm:\n"
                "           try to use DSS2 -> DirectShowSource\n"
+               "     (FFVideoSource, LWLibavVideoSource, LSMASHVideoSource, DSS2, DirectShowSource\n"
+               "           requires ffms2.dll, LSMASHSource.dll, avss.dll, DirectShowSource.dll)\n"
                "\n");
         printf("Options:\n"
-               " -L, --x264-binary <file>   User defined x264 binary path. [Default=\"%s\"]\n", DEFAULT_BINARY_PATH);
+               " -L, --x26x-binary <file>   User defined x26x binary path.\n"
+               "                                Default: \"%s\" if output file is *.h265/.265/.hevc\n"
+               "                                         otherwise \"%s\"\n",
+                                                DEFAULT_X265_BINARY_PATH, DEFAULT_X264_BINARY_PATH);
         printf("     --seek-mode <string>   Set seek mode when using --seek. [Default=\"fast\"]\n"
-               "                                - fast: Skip process of frames before seek number as x264 does if no\n"
+               "                                - fast: Skip process of frames before seek number as x26x does if no\n"
                "                                        --tcfile-in/--qpfile specified;\n"
                "                                        otherwise freeze frames before seek number to skip process, \n"
                "                                        but keep frame number as-is.\n"
-               "                                        ( x264 treats tcfile-in/qpfile as timecodes/qpfile of input \n"
+               "                                        ( x26x treats tcfile-in/qpfile as timecodes/qpfile of input \n"
                "                                        video, not output video )\n"
                "                                        Normally safe enough for randomly seekable AviSynth scripts.\n"
                "                                        May break scripts which can only be linearly seeked, such as\n"
                "                                        TDecimate(mode=3)\n"
-               "                                - safe: Process and deliver every frame to x264.\n"
+               "                                - safe: Process and deliver every frame to x26x.\n"
                "                                        Should give accurate result with every AviSynth script.\n"
                "                                        Significantly slower when the process is heavy.\n");
         return -1;
