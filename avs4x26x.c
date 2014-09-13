@@ -192,7 +192,7 @@ if( avs_h.func.avs_function_exists( avs_h.env, "AutoloadPlugins" ) )            
 {                                                                                                       \
     res = avs_h.func.avs_invoke( avs_h.env, "AutoloadPlugins", avs_new_value_array( NULL, 0 ), NULL );  \
     if( avs_is_error( res ) )                                                                           \
-        fprintf( stderr, "AutoloadPlugins failed: %s\n", avs_as_string( res ) );                        \
+        print_error( "AutoloadPlugins failed: %s\n", avs_as_string( res ) );                            \
 }
 
 char* generate_new_commandline(int argc, char *argv[], int b_hbpp_vfw, int i_frame_total,
@@ -1054,7 +1054,12 @@ source_dss:
 
         if (!CreateProcess(NULL, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si_info, &pi_info))
         {
-            print_error("Error: Failed to create process <%d>!", (int)GetLastError());
+            LPVOID error_message;
+            DWORD error = GetLastError();
+            FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL, error, 0, (LPTSTR)&error_message, 0, NULL);
+            print_error( "Error %d: Failed to create process. %s", error, (LPCTSTR)error_message);
+            LocalFree(error_message);
             free(cmd);
             goto pipe_fail;
         }
